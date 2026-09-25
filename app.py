@@ -498,62 +498,64 @@ tab_resumen, tab_catalogo, tab_concepto = st.tabs([
 ])
 
 # -------------------------------------------------------------------
-# TAB 1: RESUMEN EJECUTIVO
+# TAB 1: RESUMEN EJECUTIVO (SOLO PORCENTAJES DE AVANCE)
 # -------------------------------------------------------------------
 with tab_resumen:
-    st.subheader("Indicadores Clave de Desempeño (KPIs)")
+    st.subheader("Indicadores Clave de Desempeño (% Avance)")
+    
+    # Cálculos porcentuales
+    pct_pendiente_estimar = pct_financiero_ejecutado - pct_financiero_estimado
+    pct_saldo_ejecutar = 100.0 - pct_financiero_ejecutado
     
     c1, c2, c3, c4 = st.columns(4)
     
     with c1:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Monto Contratado</div>
-            <div class="kpi-value">${monto_contratado:,.2f}</div>
-            <div class="kpi-sub">100% Presupuesto</div>
+            <div class="kpi-label">% Avance Físico</div>
+            <div class="kpi-value">{pct_financiero_ejecutado:.2f}%</div>
+            <div class="kpi-sub">Ejecutado en Campo</div>
         </div>
         """, unsafe_allow_html=True)
         
     with c2:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Monto Ejecutado</div>
-            <div class="kpi-value">${monto_ejecutado:,.2f}</div>
-            <div class="kpi-sub">{pct_financiero_ejecutado:.2f}% Avance Físico</div>
+            <div class="kpi-label">% Avance Estimado</div>
+            <div class="kpi-value">{pct_financiero_estimado:.2f}%</div>
+            <div class="kpi-sub">Total Facturado</div>
         </div>
         """, unsafe_allow_html=True)
 
     with c3:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Monto Estimado</div>
-            <div class="kpi-value">${monto_estimado:,.2f}</div>
-            <div class="kpi-sub">{pct_financiero_estimado:.2f}% Facturado</div>
+            <div class="kpi-label">% Pendiente de Estimar</div>
+            <div class="kpi-value">{max(pct_pendiente_estimar, 0.0):.2f}%</div>
+            <div class="kpi-sub">Ejecutado sin Estimar</div>
         </div>
         """, unsafe_allow_html=True)
 
     with c4:
-        saldo_financiero = monto_contratado - monto_ejecutado
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">Saldo por Ejecutar</div>
-            <div class="kpi-value">${saldo_financiero:,.2f}</div>
-            <div class="kpi-sub">{100 - pct_financiero_ejecutado:.2f}% Disponible</div>
+            <div class="kpi-label">% Saldo por Ejecutar</div>
+            <div class="kpi-value">{max(pct_saldo_ejecutar, 0.0):.2f}%</div>
+            <div class="kpi-sub">Trabajo Pendiente</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.write("")
     st.write("")
     
-    # Progreso visual
+    # Barras de progreso visuales
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-        st.write("📈 **Avance Físico / Ejecutado:**")
+        st.write("📈 **Progreso Físico (Ejecutado):**")
         st.progress(min(pct_financiero_ejecutado / 100, 1.0))
     with col_p2:
-        st.write("📝 **Avance Estimado / Cobrado:**")
+        st.write("📝 **Progreso Administrativo (Estimado):**")
         st.progress(min(pct_financiero_estimado / 100, 1.0))
-
 # -------------------------------------------------------------------
 # TAB 2: CATÁLOGO Y TABLA GENERAL
 # -------------------------------------------------------------------
