@@ -20,16 +20,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados para un entorno limpio y profesional
 st.markdown("""
 <style>
-    /* Estilo general de la app */
     .stApp {
         background-color: #F8FAFC;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
-    
-    /* Banner principal de Obra */
     .header-card {
         background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
         color: #FFFFFF;
@@ -54,8 +50,6 @@ st.markdown("""
         margin-right: 10px;
         margin-top: 4px;
     }
-    
-    /* Cards para métricas clave */
     .kpi-card {
         background-color: #FFFFFF;
         border: 1px solid #E2E8F0;
@@ -83,8 +77,6 @@ st.markdown("""
         font-weight: 600;
         margin-top: 2px;
     }
-
-    /* Ocultar elementos innecesarios */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -107,7 +99,6 @@ def get_lista_puentes():
     conn = get_connection()
     cursor = conn.cursor()
     rows = []
-    
     try:
         cursor.execute("SELECT id_puente, nombre_contrato FROM proyecto")
         rows = cursor.fetchall()
@@ -134,7 +125,6 @@ def get_proyecto_info(id_puente):
     conn = get_connection()
     cursor = conn.cursor()
     row = None
-    
     try:
         cursor.execute(
             "SELECT nombre_contrato, num_contrato, contratista FROM proyecto WHERE CAST(id_puente AS TEXT) = CAST(? AS TEXT)", 
@@ -231,7 +221,6 @@ def generar_pdf_general(df, info_proj):
 
     monto_contrato = (df["Contratado"] * df["P.U."]).sum() if "P.U." in df else 0
     monto_ejecutado = (df["Ejecutado"] * df["P.U."]).sum() if "P.U." in df else 0
-    monto_estimado = (df["Estimado"] * df["P.U."]).sum() if "P.U." in df else 0
     pct_ejecutado = (monto_ejecutado / monto_contrato * 100) if monto_contrato > 0 else 0
 
     data_header = [
@@ -409,6 +398,156 @@ def generar_pdf_concepto_individual(info_concepto, df_historia, info_proj):
     buffer.seek(0)
     return buffer
 
+def generar_pdf_estimacion(info_proj, num_estimacion, df_reporte_est, df_detalle_consumos, total_monto_est):
+    """ Genera el PDF detallado del cobro, gasto por concepto y desglose físico (en qué se gastó) """
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    elements = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=13, leading=15, textColor=colors.HexColor('#1E3A8A'))
+    sub_style = ParagraphStyle('SubTitleStyle', parent=styles['Heading2'], fontSize=9.5, leading=12, textColor=colors.HexColor('#1E3A8A'))
+    cell_style = ParagraphStyle('CellStyle', parent=styles['Normal'], fontSize=6.5, leading=8)
+    cell_style_bold = ParagraphStyle('CellStyleBold', parent=styles['Normal'], fontSize=7, leading=9, fontName='Helvetica-Bold')
+    meta_style = ParagraphStyle('MetaStyle', parent=styles['Normal'], fontSize=7.5, leading=9.5)
+
+    elements.append(Paragraph(f"<b>REPORTE Y DESGLOSE FINANCIERO: {num_estimacion.upper()}</b>", title_style))
+    elements.append(Spacer(1, 4))
+
+    data_header = [
+        [
+            Paragraph(f"<b>Obra / Puente:</b> {info_proj['nombre_contrato']}", meta_style),
+            Paragraph(f"<b>Nº Contrato:</b> {info_proj['num_contrato']}", meta_style),
+            Paragraph(f"<b>Estimación:</b> {num_estimacion}", meta_style)
+        ],
+        [
+            Paragraph(f"<b>Empresa Contratista:</b> {info_proj['contratista']}", meta_style),
+            Paragraph(f"<b>Fecha Emisión:</b> {date.today().strftime('%d/%m/%Y')}", meta_style),
+            Paragraph(f"<b>Monto Total Estimación:</b> ${total_monto_est:,.2f}", meta_style)
+        ]
+    ]
+    t_header = Table(data_header, colWidths=[310, 230, 210])
+    t_header.setStyle(TableStyle([
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#94A3B8')),
+        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor('#F1F5F9')),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 3),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+    ]))
+    elements.append(t_header)
+    elements.append(Spacer(1, 8))
+
+    # SECCIÓN 1: RESUMEN POR CONCEPTO
+    elements.append(Paragraph("<b>1. RESUMEN DE COBROS POR CONCEPTO DEL CATÁLOGO</b>", sub_style))
+    elements.append(Spacer(1, 4))
+
+    data_resumen = [["No.", "Descripción de Concepto", "Unidad", "P.U. ($)", "Cant. Est.", "Monto Estimado ($)", "Cant. Ejec. Acum.", "Monto Pendiente ($)"]]
+
+    tot_est = 0.0
+    tot_pend = 0.0
+
+    for _, row in df_reporte_est.iterrows():
+        desc_txt = str(row["Descripción"]).strip() if pd.notna(row["Descripción"]) else "-"
+        pu_val = row.get("P.U.", 0.0)
+        cant_est = row.get("cantidad_estimacion", 0.0)
+        monto_est = row.get("Monto Estimación", cant_est * pu_val)
+        cant_ejec = row.get("Ejecutado", 0.0)
+        monto_pend = row.get("Monto Pendiente", 0.0)
+
+        tot_est += monto_est
+        tot_pend += monto_pend
+        
+        data_resumen.append([
+            str(row["No."]),
+            Paragraph(desc_txt, cell_style),
+            str(row["Unidad"]),
+            f"${pu_val:,.2f}",
+            f"{cant_est:,.2f}",
+            f"${monto_est:,.2f}",
+            f"{cant_ejec:,.2f}",
+            f"${monto_pend:,.2f}"
+        ])
+
+    data_resumen.append([
+        Paragraph("<b>TOTALES</b>", cell_style_bold),
+        "",
+        "",
+        "",
+        "",
+        Paragraph(f"<b>${tot_est:,.2f}</b>", cell_style_bold),
+        "",
+        Paragraph(f"<b>${tot_pend:,.2f}</b>", cell_style_bold)
+    ])
+
+    col_widths1 = [30, 260, 45, 65, 70, 90, 90, 100]
+    t1 = Table(data_resumen, repeatRows=1, colWidths=col_widths1)
+    t1.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E3A8A')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 6.5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+        ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
+        ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+        ('ALIGN', (5, 1), (5, -1), 'RIGHT'),
+        ('ALIGN', (7, 1), (7, -1), 'RIGHT'),
+    ]))
+    elements.append(t1)
+    elements.append(Spacer(1, 12))
+
+    # SECCIÓN 2: DESGLOSE FÍSICO / ¿EN QUÉ SE GASTÓ?
+    elements.append(Paragraph("<b>2. DESGLOSE DETALLADO DE TRABAJOS EJECUTADOS (¿EN QUÉ SE GASTÓ?)</b>", sub_style))
+    elements.append(Spacer(1, 4))
+
+    data_desglose = [["Fecha", "No. Conc.", "Descripción / Concepto", "Ubicación / Elemento Ejecutado", "Remisión / Folio", "Cant.", "Unidad", "P.U. ($)", "Monto ($)"]]
+
+    if df_detalle_consumos.empty:
+        data_desglose.append(["-", "-", "Sin registros específicos de campo para esta estimación.", "-", "-", "-", "-", "-", "-"])
+    else:
+        monto_total_desglose = 0.0
+        for _, row_c in df_detalle_consumos.iterrows():
+            monto_item = row_c["Monto Importe"]
+            monto_total_desglose += monto_item
+            
+            data_desglose.append([
+                str(row_c["Fecha"]),
+                str(row_c["No. Concepto"]),
+                Paragraph(str(row_c["Descripción Concepto"]), cell_style),
+                Paragraph(str(row_c["Ubicación / Trabajo Realizado"]), cell_style),
+                str(row_c["Remisión / Folio"] if pd.notna(row_c["Remisión / Folio"]) else "-"),
+                f"{row_c['Cantidad']:,.2f}",
+                str(row_c["Unidad"]),
+                f"${row_c['P.U.']:,.2f}",
+                f"${monto_item:,.2f}"
+            ])
+
+        data_desglose.append([
+            Paragraph("<b>TOTAL GASTADO EN ESTA ESTIMACIÓN</b>", cell_style_bold),
+            "", "", "", "", "", "", "",
+            Paragraph(f"<b>${monto_total_desglose:,.2f}</b>", cell_style_bold)
+        ])
+
+    col_widths2 = [55, 45, 180, 210, 60, 50, 40, 50, 60]
+    t2 = Table(data_desglose, repeatRows=1, colWidths=col_widths2)
+    t2.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 6.5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (1, -1), 'CENTER'),
+        ('ALIGN', (4, 0), (6, -1), 'CENTER'),
+        ('ALIGN', (7, 1), (-1, -1), 'RIGHT'),
+    ]))
+    elements.append(t2)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
 # -------------------------------------------------------------------
 # PANEL LATERAL (SIDEBAR): SELECCIÓN Y CONFIGURACIÓN
 # -------------------------------------------------------------------
@@ -434,7 +573,7 @@ with st.sidebar:
     info_proyecto = get_proyecto_info(id_puente)
     
     st.divider()
-    st.caption("🔍 Utiliza las pestañas superiores para navegar entre el resumen ejecutivo, catálogo y fichas detalladas.")
+    st.caption("🔍 Utiliza las pestañas superiores para navegar entre el resumen ejecutivo, catálogo, fichas detalladas y estimaciones.")
 
 # -------------------------------------------------------------------
 # OBTENCIÓN Y CÁLCULO DE DATOS
@@ -491,19 +630,19 @@ st.markdown(f"""
 # -------------------------------------------------------------------
 # NAVEGACIÓN POR PESTAÑAS (TABS)
 # -------------------------------------------------------------------
-tab_resumen, tab_catalogo, tab_concepto = st.tabs([
+tab_resumen, tab_catalogo, tab_concepto, tab_estimacion = st.tabs([
     "📊 Resumen Ejecutivo", 
     "📋 Catálogo y Avances", 
-    "🔍 Detalle por Concepto"
+    "🔍 Detalle por Concepto",
+    "📑 Consulta por Estimación"
 ])
 
 # -------------------------------------------------------------------
-# TAB 1: RESUMEN EJECUTIVO (SOLO PORCENTAJES DE AVANCE)
+# TAB 1: RESUMEN EJECUTIVO (SÓLO PORCENTAJES)
 # -------------------------------------------------------------------
 with tab_resumen:
     st.subheader("Indicadores Clave de Desempeño (% Avance)")
     
-    # Cálculos porcentuales
     pct_pendiente_estimar = pct_financiero_ejecutado - pct_financiero_estimado
     pct_saldo_ejecutar = 100.0 - pct_financiero_ejecutado
     
@@ -548,7 +687,6 @@ with tab_resumen:
     st.write("")
     st.write("")
     
-    # Barras de progreso visuales
     col_p1, col_p2 = st.columns(2)
     with col_p1:
         st.write("📈 **Progreso Físico (Ejecutado):**")
@@ -556,6 +694,7 @@ with tab_resumen:
     with col_p2:
         st.write("📝 **Progreso Administrativo (Estimado):**")
         st.progress(min(pct_financiero_estimado / 100, 1.0))
+
 # -------------------------------------------------------------------
 # TAB 2: CATÁLOGO Y TABLA GENERAL
 # -------------------------------------------------------------------
@@ -626,7 +765,6 @@ with tab_concepto:
         df_hist_ind = pd.read_sql_query(query_hist_ind, conn, params=(str(id_puente), concepto_elegido))
         conn.close()
 
-        # Ajustamos el índice para que inicie en 1 en lugar de 0
         if not df_hist_ind.empty:
             df_hist_ind.index = range(1, len(df_hist_ind) + 1)
 
@@ -656,9 +794,6 @@ with tab_concepto:
                 use_container_width=True
             )
 
-        # -----------------------------------------------------------
-        # CUADRO CONTENEDOR DETALLADO DEL CONCEPTO SELECCIONADO
-        # -----------------------------------------------------------
         st.markdown(f"""
         <div style="background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 14px; padding: 22px; margin-top: 15px; margin-bottom: 24px; box-shadow: 0 2px 5px rgba(0,0,0,0.04);">
             <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #2563EB; padding-bottom: 10px; margin-bottom: 16px;">
@@ -698,3 +833,182 @@ with tab_concepto:
             st.dataframe(df_hist_ind, use_container_width=True, height=220)
         else:
             st.info("Sin registros de volumen capturados en campo para este concepto.")
+
+# -------------------------------------------------------------------
+# TAB 4: CONSULTA POR ESTIMACIÓN + ¿EN QUÉ SE GASTÓ? + IMPRESIÓN PDF
+# -------------------------------------------------------------------
+with tab_estimacion:
+    conn = get_connection()
+    query_estimaciones = """
+        SELECT DISTINCT num_estimacion 
+        FROM consumos 
+        WHERE CAST(id_puente AS TEXT) = CAST(? AS TEXT) 
+          AND num_estimacion IS NOT NULL 
+          AND num_estimacion != ''
+        ORDER BY num_estimacion ASC
+    """
+    df_estimaciones = pd.read_sql_query(query_estimaciones, conn, params=(str(id_puente),))
+    conn.close()
+
+    lista_ests = df_estimaciones["num_estimacion"].dropna().tolist()
+
+    if not lista_ests:
+        st.info("📌 No se encontraron estimaciones registradas para esta obra.")
+    else:
+        col_sel1, col_sel2 = st.columns([3, 1])
+        with col_sel1:
+            est_seleccionada = st.selectbox(
+                "🔎 Selecciona la Estimación a consultar:",
+                options=lista_ests
+            )
+
+        # 1. Agrupado por Concepto para Resumen
+        conn = get_connection()
+        query_detalle_est = """
+            SELECT 
+                id_concepto, 
+                SUM(cantidad) AS cantidad_estimacion
+            FROM consumos
+            WHERE CAST(id_puente AS TEXT) = CAST(? AS TEXT) 
+              AND num_estimacion = ?
+            GROUP BY id_concepto
+        """
+        df_cantidades_est = pd.read_sql_query(query_detalle_est, conn, params=(str(id_puente), est_seleccionada))
+
+        # 2. Desglose Detallado de Registros (¿En qué se gastó?)
+        query_detalle_consumos = """
+            SELECT 
+                r.fecha AS "Fecha",
+                r.id_concepto AS "No. Concepto",
+                c.descripcion AS "Descripción Concepto",
+                r.ubicacion AS "Ubicación / Trabajo Realizado",
+                r.remision AS "Remisión / Folio",
+                r.cantidad AS "Cantidad",
+                c.unidad AS "Unidad",
+                c.precio_unitario AS "P.U.",
+                (r.cantidad * c.precio_unitario) AS "Monto Importe"
+            FROM consumos r
+            JOIN catalogo c ON r.id_concepto = c.id_concepto AND CAST(r.id_puente AS TEXT) = CAST(c.id_puente AS TEXT)
+            WHERE CAST(r.id_puente AS TEXT) = CAST(? AS TEXT) 
+              AND r.num_estimacion = ?
+            ORDER BY r.fecha ASC, r.id ASC
+        """
+        df_detalle_consumos = pd.read_sql_query(query_detalle_consumos, conn, params=(str(id_puente), est_seleccionada))
+        conn.close()
+
+        df_reporte_est = df.merge(
+            df_cantidades_est, 
+            left_on="No.", 
+            right_on="id_concepto", 
+            how="inner"
+        )
+
+        if df_reporte_est.empty:
+            st.warning(f"No hay volúmenes registrados para la {est_seleccionada}.")
+        else:
+            # Cálculos Financieros
+            df_reporte_est["Monto Estimación"] = df_reporte_est["cantidad_estimacion"] * df_reporte_est["P.U."]
+            df_reporte_est["Monto Contratado Total"] = df_reporte_est["Contratado"] * df_reporte_est["P.U."]
+            df_reporte_est["Monto Ejecutado Total"] = df_reporte_est["Ejecutado"] * df_reporte_est["P.U."]
+            df_reporte_est["Monto Pendiente"] = df_reporte_est["Monto Contratado Total"] - df_reporte_est["Monto Ejecutado Total"]
+
+            total_monto_est = df_reporte_est["Monto Estimación"].sum()
+            total_monto_contratado = df_reporte_est["Monto Contratado Total"].sum()
+            total_monto_ejecutado = df_reporte_est["Monto Ejecutado Total"].sum()
+            total_monto_pendiente = df_reporte_est["Monto Pendiente"].sum()
+
+            # Botón para descargar PDF completo (Resumen + Desglose Físico "En qué se gastó")
+            pdf_est_bytes = generar_pdf_estimacion(info_proyecto, est_seleccionada, df_reporte_est, df_detalle_consumos, total_monto_est)
+            
+            with col_sel2:
+                st.write("")
+                st.download_button(
+                    f"📄 Descargar PDF Detallado",
+                    data=pdf_est_bytes,
+                    file_name=f"Reporte_Gastos_{est_seleccionada.replace(' ', '_')}_{id_puente}_{date.today()}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+
+            st.markdown(f"### 📄 Resumen Financiero — **{est_seleccionada}**")
+
+            k1, k2, k3, k4 = st.columns(4)
+            with k1:
+                st.markdown(f"""
+                <div class="kpi-card">
+                    <div class="kpi-label">Monto de esta Estimación</div>
+                    <div class="kpi-value" style="color: #2563EB;">${total_monto_est:,.2f}</div>
+                    <div class="kpi-sub">Total Facturado/Cobrado</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with k2:
+                st.markdown(f"""
+                <div class="kpi-card">
+                    <div class="kpi-label">Monto Ejecutado Acumulado</div>
+                    <div class="kpi-value">${total_monto_ejecutado:,.2f}</div>
+                    <div class="kpi-sub">Total Físico a la fecha</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with k3:
+                st.markdown(f"""
+                <div class="kpi-card">
+                    <div class="kpi-label">Monto Pendiente por Ejecutar</div>
+                    <div class="kpi-value" style="color: #D97706;">${total_monto_pendiente:,.2f}</div>
+                    <div class="kpi-sub">Saldo de estos conceptos</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with k4:
+                st.markdown(f"""
+                <div class="kpi-card">
+                    <div class="kpi-label">Monto Contratado (Conceptos)</div>
+                    <div class="kpi-value">${total_monto_contratado:,.2f}</div>
+                    <div class="kpi-sub">Presupuesto asignado</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.write("")
+            
+            # Sub-pestanas de la estimación para alternar vistas fácilmente
+            tab_e_resumen, tab_e_desglose = st.tabs(["📊 Resumen por Concepto", "🔍 ¿En qué se gastó? (Desglose Físico)"])
+
+            with tab_e_resumen:
+                st.subheader("📋 Conceptos e Importes cobrados en la Estimación")
+                df_tabla_mostrar = df_reporte_est[[
+                    "No.", "Descripción", "Unidad", "P.U.", "cantidad_estimacion", "Monto Estimación", "Ejecutado", "Monto Pendiente"
+                ]].copy()
+
+                df_tabla_mostrar.columns = [
+                    "No. Concepto", "Descripción", "Unidad", "P.U. ($)", "Cant. Estimada", "Monto Estimado ($)", "Cant. Ejecutada Acum.", "Monto Pendiente ($)"
+                ]
+                df_tabla_mostrar.index = range(1, len(df_tabla_mostrar) + 1)
+
+                st.dataframe(
+                    df_tabla_mostrar.style.format({
+                        "P.U. ($)": "${:,.2f}",
+                        "Cant. Estimada": "{:,.2f}",
+                        "Monto Estimado ($)": "${:,.2f}",
+                        "Cant. Ejecutada Acum.": "{:,.2f}",
+                        "Monto Pendiente ($)": "${:,.2f}"
+                    }),
+                    use_container_width=True,
+                    height=300
+                )
+
+            with tab_e_desglose:
+                st.subheader("🏗️ Historial Físico de Capturas de Campo (Ubicación, Folios e Importes)")
+                if not df_detalle_consumos.empty:
+                    df_detalle_consumos.index = range(1, len(df_detalle_consumos) + 1)
+                    st.dataframe(
+                        df_detalle_consumos.style.format({
+                            "Cantidad": "{:,.2f}",
+                            "P.U.": "${:,.2f}",
+                            "Monto Importe": "${:,.2f}"
+                        }),
+                        use_container_width=True,
+                        height=320
+                    )
+                else:
+                    st.info("No se encontraron descripciones de ubicaciones o remisiones para esta estimación.")
